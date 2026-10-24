@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Food Guard",
+    "slug": "food-guard",
+    "version": "1.0.0",
+    "scheme": "foodguard",
+    "icon": "./assets/icon.png",
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "package": "com.foodguard.app"
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "d02eff5f-6e01-4108-95f2-879f9b24dd43"
+      }
+    }
+  }
+}

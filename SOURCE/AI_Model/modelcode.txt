@@ -1,0 +1,1095 @@
+# FoodGuard final model training script
+# This script trains a balanced model for food detection, item classification,
+# and freshness prediction. It also includes an irrelevant image class so the
+# app can reject non-food images.
+#
+# Designed for Google Colab free tier.
+# Final exported files:
+# - best_model.keras
+# - labels.pkl
+# - model_config.json
+
+import os, cv2, json, pickle, zipfile, shutil, warnings, random, time
+import numpy as np
+import tensorflow as tf
+from pathlib import Path
+from collections import defaultdict, Counter
+from google.colab import drive
+from tensorflow.keras import layers, Model, regularizers
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+from tensorflow.keras.utils import Sequence
+from sklearn.utils.class_weight import compute_class_weight
+
+warnings.filterwarnings("ignore")
+tf.get_logger().setLevel("ERROR")
+
+# 1. Mount Google Drive and check GPU availability
+drive.mount("/content/drive")
+
+gpus = tf.config.list_physical_devices("GPU")
+if gpus:
+    print(f"\nGPU active: {gpus[0]}")
+    try:
+        tf.config.experimental.set_memory_growth(gpus[0], True)
+    except Exception:
+        pass
+else:
+    print("\nNo GPU detected. Training will be slow.")
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
+
+# 2. Define dataset and output paths
+ZIP_PATH      = "/content/drive/MyDrive/archive.zip"
+EXTRACT_PATH  = "/content/dataset"
+BASE_PATH     = "/content/dataset/archive"
+
+SAVE_DIR      = "/content/drive/MyDrive/FoodGuard_Model_Final/"
+EXPORT_DIR    = "/content/drive/MyDrive/FoodGuard_Export_Final/"
+
+os.makedirs(SAVE_DIR, exist_ok=True)
+os.makedirs(EXPORT_DIR, exist_ok=True)
+
+BEST_MODEL_PATH = os.path.join(SAVE_DIR, "best_model.keras")
+LAST_MODEL_PATH = os.path.join(SAVE_DIR, "last_epoch_model.keras")
+LABEL_PATH      = os.path.join(SAVE_DIR, "labels.pkl")
+SPLIT_PATH      = os.path.join(SAVE_DIR, "splits.pkl")
+STATE_PATH      = os.path.join(SAVE_DIR, "state.json")
+LOG_PATH        = os.path.join(SAVE_DIR, "training_log.csv")
+EXTRACT_FLAG    = os.path.join(SAVE_DIR, ".extracted_ok")
+
+# Change these flags only when you want to rebuild or reset training files
+FORCE_REEXTRACT = False
+REBUILD_SPLITS  = False
+RESET_TRAINING  = False
+
+# 3. Set training hyperparameters
+IMG_SIZE    = (192, 192)
+BATCH_SIZE  = 32
+
+PHASE1_EPOCHS = 8
+PHASE2_EPOCHS = 45
+
+LR_HEAD     = 1e-3
+LR_FINETUNE = 1e-5
+
+# Important balancing settings
+MAX_PER_BUCKET          = 1500   # max images from each class bucket
+TARGET_TRAIN_PER_BUCKET = 1000   # minority train buckets are repeated up to this
+MAX_NONFOOD_TOTAL       = 4500   # total NonFood images from all nonfood folders
+
+CONFIDENCE_THR  = 0.60
+IRRELEVANT_THR  = 0.55
+
+FRESH_LABEL     = 0
+SEMIFRESH_LABEL = 1
+SPOILED_LABEL   = 2
+
+FRESHNESS_LIST = ["Fresh", "Semi-Fresh", "Spoiled"]
+FOODNESS_LIST  = ["Irrelevant", "Food"]
+
+EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+# 4. Optional reset settings
+if RESET_TRAINING:
+    print("\nRESET_TRAINING=True, removing old model and checkpoint files...")
+    for p in [BEST_MODEL_PATH, LAST_MODEL_PATH, STATE_PATH, LOG_PATH]:
+        if os.path.exists(p):
+            os.remove(p)
+
+if REBUILD_SPLITS:
+    print("\nREBUILD_SPLITS=True, removing old dataset split file...")
+    if os.path.exists(SPLIT_PATH):
+        os.remove(SPLIT_PATH)
+
+if FORCE_REEXTRACT:
+    print("\nFORCE_REEXTRACT=True, removing old extracted dataset...")
+    if os.path.exists(EXTRACT_PATH):
+        shutil.rmtree(EXTRACT_PATH)
+    if os.path.exists(EXTRACT_FLAG):
+        os.remove(EXTRACT_FLAG)
+
+# 5. Extract and locate the dataset
+need_extract = (
+    FORCE_REEXTRACT
+    or not os.path.exists(EXTRACT_FLAG)
+    or not os.path.exists(EXTRACT_PATH)
+)
+
+if need_extract:
+    print("\nExtracting archive.zip from Google Drive...")
+    if os.path.exists(EXTRACT_PATH):
+        shutil.rmtree(EXTRACT_PATH)
+    os.makedirs(EXTRACT_PATH, exist_ok=True)
+
+    # Retry extraction because Google Drive can sometimes disconnect during large zip operations
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            with zipfile.ZipFile(ZIP_PATH, "r") as z:
+                z.extractall(EXTRACT_PATH)
+            break # Exit loop if successful
+        except OSError as e:
+            if attempt < max_retries - 1:
+                print(f"\nWarning: Extraction failed (Attempt {attempt + 1}/{max_retries}): {e}")
+                print("   Retrying in 5 seconds...")
+                time.sleep(5)
+            else:
+                raise # Re-raise the last exception if all retries fail
+
+    open(EXTRACT_FLAG, "w").close()
+    print("Dataset extracted successfully.")
+else:
+    print("\nDataset is already extracted.")
+
+def find_dataset_base(extract_path):
+    extract_path = Path(extract_path)
+    candidates = []
+
+    for p in extract_path.rglob("*"):
+        if p.is_dir():
+            folder_names = {x.name for x in p.iterdir() if x.is_dir()}
+            score = 0
+
+            for required in [
+                "Fruit_Veg_Dataset",
+                "Chicken_Dataset",
+                "Fish_Dataset",
+                "Meat_Dataset",
+                "NonFood_Dataset",
+            ]:
+                if required in folder_names:
+                    score += 1
+
+            if score >= 2:
+                candidates.append((score, str(p)))
+
+    if candidates:
+        candidates.sort(reverse=True)
+        return candidates[0][1]
+
+    return BASE_PATH
+
+BASE_PATH = find_dataset_base(EXTRACT_PATH)
+print(f"\nFinal dataset base path: {BASE_PATH}")
+
+# 6. Helper functions
+def get_images(folder: Path, recursive=False):
+    if not folder.exists():
+        return []
+
+    iterator = folder.rglob("*") if recursive else folder.glob("*")
+    return [p for p in iterator if p.is_file() and p.suffix.lower() in EXT]
+
+def find_subfolder(parent: Path, possible_names):
+    if not parent.exists():
+        return None
+
+    existing = {
+        x.name.lower().replace(" ", ""): x
+        for x in parent.iterdir()
+        if x.is_dir()
+    }
+
+    for name in possible_names:
+        key = name.lower().replace(" ", "")
+        if key in existing:
+            return existing[key]
+
+    return None
+
+def food_record(path, freshness, item):
+    # Each record stores: image path, freshness label, item name, and food/non-food label
+    return (str(path), int(freshness), str(item), 1)
+
+def nonfood_record(path):
+    # Non-food images use a dummy freshness label because they should not train the freshness output
+    return (str(path), 0, "NonFood", 0)
+
+def freshness_name(label):
+    return FRESHNESS_LIST[label]
+
+def print_bucket_counts(records, title, max_lines=300):
+    print(f"\n{title}")
+    print(f"   Total images: {len(records):,}")
+
+    bucket = Counter()
+    for path, fresh, item, foodness in records:
+        if foodness == 0:
+            key = (item, "Irrelevant")
+        else:
+            key = (item, freshness_name(fresh))
+        bucket[key] += 1
+
+    for i, ((item, label), count) in enumerate(sorted(bucket.items())):
+        if i >= max_lines:
+            print("   ... more hidden")
+            break
+        print(f"   {item:14s} | {label:12s} : {count:,}")
+
+# 7. Dataset collection functions
+def collect_fruit_veg(base):
+    print("\nCollecting fruit and vegetable images...")
+    records = []
+
+    root = Path(base) / "Fruit_Veg_Dataset"
+    if not root.exists():
+        print("   Warning: Fruit_Veg_Dataset not found.")
+        return records
+
+    fresh_dir = root / "Fresh"
+    rotten_dir = root / "Rotten"
+
+    item_variants = {
+        "Apple": ["Apple"],
+        "Banana": ["Banana"],
+        "Bellpepper": ["Bellpepper", "BellPepper"],
+        "Bittergourd": ["Bittergourd", "Bittergroud"],
+        "Capsicum": ["Capsicum", "Capciscum"],
+        "Carrot": ["Carrot"],
+        "Cucumber": ["Cucumber"],
+        "Grape": ["Grape"],
+        "Guava": ["Guava"],
+        "Jujube": ["Jujube"],
+        "Mango": ["Mango"],
+        "Okra": ["Okra", "Okara"],
+        "Orange": ["Orange"],
+        "Pomegranate": ["Pomegranate"],
+        "Potato": ["Potato"],
+        "Strawberry": ["Strawberry"],
+        "Tomato": ["Tomato"],
+    }
+
+    for item, variants in item_variants.items():
+        fresh_names = []
+        rotten_names = []
+
+        for v in variants:
+            fresh_names += [f"Fresh{v}", f"Fresh {v}"]
+            rotten_names += [f"Rotten{v}", f"Rotten {v}"]
+
+        fd = find_subfolder(fresh_dir, fresh_names)
+        rd = find_subfolder(rotten_dir, rotten_names)
+
+        if fd:
+            imgs = get_images(fd)
+            for p in imgs:
+                records.append(food_record(p, FRESH_LABEL, item))
+            print(f"   {item:14s} Fresh  : {len(imgs):,}")
+        else:
+            print(f"   Warning: {item:14s} Fresh folder missing")
+
+        if rd:
+            imgs = get_images(rd)
+            for p in imgs:
+                records.append(food_record(p, SPOILED_LABEL, item))
+            print(f"   {item:14s} Spoiled: {len(imgs):,}")
+        else:
+            print(f"   Warning: {item:14s} Rotten folder missing")
+
+    return records
+
+def collect_chicken(base):
+    print("\nCollecting chicken images...")
+    records, test_records = [], []
+
+    root = Path(base) / "Chicken_Dataset"
+    if not root.exists():
+        print("   Warning: Chicken_Dataset not found.")
+        return records, test_records
+
+    label_map = {
+        "Segar": FRESH_LABEL,
+        "Setengah": SEMIFRESH_LABEL,
+        "Busuk": SPOILED_LABEL,
+    }
+
+    for split in ["train", "valid", "test"]:
+        split_dir = root / split
+        if not split_dir.exists():
+            continue
+
+        for folder_name, label in label_map.items():
+            fd = split_dir / folder_name
+            if not fd.exists():
+                continue
+
+            imgs = get_images(fd)
+            for p in imgs:
+                rec = food_record(p, label, "Chicken")
+                if split == "test":
+                    test_records.append(rec)
+                else:
+                    records.append(rec)
+
+            print(f"   Chicken {split:5s} {freshness_name(label):10s}: {len(imgs):,}")
+
+    return records, test_records
+
+def collect_fish(base):
+    print("\nCollecting fish images...")
+    records = []
+
+    root = Path(base) / "Fish_Dataset"
+    if not root.exists():
+        print("   Warning: Fish_Dataset not found.")
+        return records
+
+    label_map = {
+        "C1": FRESH_LABEL,
+        "C2": SEMIFRESH_LABEL,
+        "C3": SPOILED_LABEL,
+    }
+
+    for folder_name, label in label_map.items():
+        fd = root / folder_name
+        imgs = get_images(fd)
+
+        for p in imgs:
+            records.append(food_record(p, label, "Fish"))
+
+        print(f"   Fish {folder_name:3s} {freshness_name(label):10s}: {len(imgs):,}")
+
+    return records
+
+def collect_meat(base):
+    print("\nCollecting meat images...")
+    records = []
+
+    root = Path(base) / "Meat_Dataset"
+    if not root.exists():
+        print("   Warning: Meat_Dataset not found.")
+        return records
+
+    label_map = {
+        "Fresh": FRESH_LABEL,
+        "Spoiled": SPOILED_LABEL,
+    }
+
+    for folder_name, label in label_map.items():
+        fd = root / folder_name
+        imgs = get_images(fd)
+
+        for p in imgs:
+            records.append(food_record(p, label, "Meat"))
+
+        print(f"   Meat {folder_name:8s}: {len(imgs):,}")
+
+    return records
+
+def collect_nonfood(base):
+    print("\nCollecting non-food images...")
+    records = []
+
+    root = Path(base) / "NonFood_Dataset"
+    if not root.exists():
+        print("   Warning: NonFood_Dataset not found.")
+        return records
+
+    possible_roots = [
+        root / "Unknown_Object",
+        root / "Unknown_Objects",
+        root / "UnknownObjects",
+    ]
+
+    nf_root = None
+    for p in possible_roots:
+        if p.exists():
+            nf_root = p
+            break
+
+    if nf_root is None:
+        nf_root = root
+
+    folder_counter = {}
+
+    for folder in nf_root.iterdir():
+        if folder.is_dir():
+            imgs = get_images(folder, recursive=True)
+            folder_counter[folder.name] = len(imgs)
+
+    imgs = get_images(nf_root, recursive=True)
+    random.shuffle(imgs)
+    imgs = imgs[:MAX_NONFOOD_TOTAL]
+
+    for p in imgs:
+        records.append(nonfood_record(p))
+
+    for name, count in sorted(folder_counter.items()):
+        print(f"   NonFood {name:14s}: {count:,}")
+
+    print(f"   NonFood selected total: {len(records):,} / max {MAX_NONFOOD_TOTAL:,}")
+    return records
+
+# 8. Balance the data and create splits
+def cap_each_bucket(records, max_per_bucket):
+    print(f"\nCapping each bucket to max {max_per_bucket:,} images...")
+
+    bucket = defaultdict(list)
+    for r in records:
+        path, fresh, item, foodness = r
+        key = (item, fresh, foodness)
+        bucket[key].append(r)
+
+    capped = []
+
+    print("\nImages selected per bucket after cap:")
+    for key, recs in sorted(bucket.items()):
+        item, fresh, foodness = key
+        original = len(recs)
+
+        random.shuffle(recs)
+        selected = recs[:max_per_bucket]
+        capped.extend(selected)
+
+        if foodness == 0:
+            label = "Irrelevant"
+        else:
+            label = freshness_name(fresh)
+
+        print(f"   {item:14s} | {label:12s}: {original:,} -> {len(selected):,}")
+
+    random.shuffle(capped)
+    return capped
+
+def split_by_bucket(records):
+    print("\nSplitting each bucket into Train/Val/Test = 70/15/15...")
+
+    bucket = defaultdict(list)
+    for r in records:
+        path, fresh, item, foodness = r
+        key = (item, fresh, foodness)
+        bucket[key].append(r)
+
+    train, val, test = [], [], []
+
+    for key, recs in sorted(bucket.items()):
+        random.shuffle(recs)
+        n = len(recs)
+
+        if n < 5:
+            train.extend(recs)
+            continue
+
+        n_test = max(1, int(n * 0.15))
+        n_val  = max(1, int(n * 0.15))
+
+        test_part  = recs[:n_test]
+        val_part   = recs[n_test:n_test+n_val]
+        train_part = recs[n_test+n_val:]
+
+        test.extend(test_part)
+        val.extend(val_part)
+        train.extend(train_part)
+
+        item, fresh, foodness = key
+        label = "Irrelevant" if foodness == 0 else freshness_name(fresh)
+
+        print(
+            f"   {item:14s} | {label:12s}: "
+            f"train={len(train_part):,}, val={len(val_part):,}, test={len(test_part):,}"
+        )
+
+    random.shuffle(train)
+    random.shuffle(val)
+    random.shuffle(test)
+
+    return train, val, test
+
+def oversample_training_only(train_records):
+    print(f"\nOversampling weak training buckets up to {TARGET_TRAIN_PER_BUCKET:,} images...")
+    print("   Note: Validation/Test are NOT oversampled.")
+
+    bucket = defaultdict(list)
+    for r in train_records:
+        path, fresh, item, foodness = r
+        key = (item, fresh, foodness)
+        bucket[key].append(r)
+
+    balanced = []
+
+    for key, recs in sorted(bucket.items()):
+        item, fresh, foodness = key
+        original = len(recs)
+
+        if original == 0:
+            continue
+
+        target = TARGET_TRAIN_PER_BUCKET
+
+        if original < target:
+            repeats = target // original
+            remainder = target % original
+            expanded = (recs * repeats) + recs[:remainder]
+        else:
+            expanded = recs
+
+        balanced.extend(expanded)
+
+        label = "Irrelevant" if foodness == 0 else freshness_name(fresh)
+
+        print(f"   {item:14s} | {label:12s}: {original:,} -> {len(expanded):,}")
+
+        if original < 100:
+            print(f"      Warning: very low real images for {item} {label}. Add more real images later if possible.")
+
+    random.shuffle(balanced)
+    print(f"\nFinal training images after balancing: {len(balanced):,}")
+    return balanced
+
+# 9. Load existing splits or create new ones
+if os.path.exists(SPLIT_PATH):
+    print("\nLoading saved balanced data splits...")
+    split_data = pickle.load(open(SPLIT_PATH, "rb"))
+
+    train_records = split_data["train"]
+    val_records   = split_data["val"]
+    test_records  = split_data["test"]
+    item_map      = split_data["item_map"]
+
+else:
+    print("\nCreating new dataset splits...")
+
+    fv = collect_fruit_veg(BASE_PATH)
+    ch, ch_test = collect_chicken(BASE_PATH)
+    fi = collect_fish(BASE_PATH)
+    me = collect_meat(BASE_PATH)
+    nf = collect_nonfood(BASE_PATH)
+
+    all_records = fv + ch + fi + me + nf
+
+    print_bucket_counts(all_records, "Raw dataset before balancing")
+
+    if len(all_records) == 0:
+        raise RuntimeError("No images found. Please check archive.zip structure.")
+
+    capped_records = cap_each_bucket(all_records, MAX_PER_BUCKET)
+
+    print_bucket_counts(capped_records, "Dataset after per-bucket cap")
+
+    train_records, val_records, test_records = split_by_bucket(capped_records)
+
+    if len(ch_test) > 0:
+        print(f"\nAdding original Chicken test folder images into test set: {len(ch_test):,}")
+        test_records += ch_test
+        random.shuffle(test_records)
+
+    items = sorted({r[2] for r in capped_records})
+    if "NonFood" not in items:
+        items.append("NonFood")
+
+    item_map = {item: idx for idx, item in enumerate(sorted(items))}
+
+    pickle.dump({
+        "train": train_records,
+        "val": val_records,
+        "test": test_records,
+        "item_map": item_map,
+        "version": "foodguard_final_balanced_v1"
+    }, open(SPLIT_PATH, "wb"))
+
+    print("\nDataset splits saved to Drive.")
+
+# Only the training set is oversampled; validation and test sets remain unchanged
+train_records = oversample_training_only(train_records)
+
+num_items = len(item_map)
+index_to_item = {v: k for k, v in item_map.items()}
+
+print_bucket_counts(train_records, "Final TRAIN records")
+print_bucket_counts(val_records, "Final VALIDATION records")
+print_bucket_counts(test_records, "Final TEST records")
+
+print("\nFinal item classes:")
+for item, idx in item_map.items():
+    print(f"   {idx:2d} -> {item}")
+
+# 10. Save label metadata
+labels_data = {
+    "item_map": item_map,
+    "index_to_item": index_to_item,
+    "freshness_list": FRESHNESS_LIST,
+    "foodness_list": FOODNESS_LIST,
+    "img_size": list(IMG_SIZE),
+    "confidence_threshold": CONFIDENCE_THR,
+    "irrelevant_threshold": IRRELEVANT_THR,
+    "normalization": "mobilenet_v2_preprocess_input",
+    "output_names": ["foodness", "freshness", "item"],
+}
+
+pickle.dump(labels_data, open(LABEL_PATH, "wb"))
+
+print(f"\nLabels file saved: {LABEL_PATH}")
+
+# 11. Calculate class weights
+def safe_class_weights(labels, max_weight=3.0):
+    labels = np.array(labels)
+
+    if len(labels) == 0:
+        return {}
+
+    classes = np.unique(labels)
+
+    if len(classes) <= 1:
+        return {int(classes[0]): 1.0}
+
+    weights = compute_class_weight(
+        class_weight="balanced",
+        classes=classes,
+        y=labels
+    )
+
+    return {
+        int(c): float(min(w, max_weight))
+        for c, w in zip(classes, weights)
+    }
+
+foodness_weights = safe_class_weights([r[3] for r in train_records], max_weight=3.0)
+
+fresh_labels_food = [r[1] for r in train_records if r[3] == 1]
+freshness_weights = safe_class_weights(fresh_labels_food, max_weight=3.0)
+
+item_labels = [item_map[r[2]] for r in train_records]
+item_weights = safe_class_weights(item_labels, max_weight=2.5)
+
+print("\nClass weights:")
+print("   Foodness weights :", foodness_weights)
+print("   Freshness weights:", freshness_weights)
+print("   Item weights     :", item_weights)
+
+# 12. Data generator with augmentation
+class FoodGuardGenerator(Sequence):
+    def __init__(self, records, batch_size=BATCH_SIZE, augment=False, shuffle=True):
+        super().__init__()
+        self.records = list(records)
+        self.batch_size = batch_size
+        self.augment = augment
+        self.shuffle = shuffle
+        self.on_epoch_end()
+
+    def __len__(self):
+        return int(np.ceil(len(self.records) / self.batch_size))
+
+    def on_epoch_end(self):
+        if self.shuffle:
+            random.shuffle(self.records)
+
+    def __getitem__(self, idx):
+        batch = self.records[idx*self.batch_size:(idx+1)*self.batch_size]
+
+        X = []
+        y_foodness = []
+        y_freshness = []
+        y_item = []
+
+        w_foodness = []
+        w_freshness = []
+        w_item = []
+
+        for path, fresh_label, item_name, foodness_label in batch:
+            img = cv2.imread(path)
+
+            if img is None:
+                continue
+
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, IMG_SIZE)
+
+            if self.augment:
+                img = self.augment_img(img)
+
+            img = img.astype("float32")
+            img = preprocess_input(img)
+
+            item_label = item_map[item_name]
+
+            X.append(img)
+            y_foodness.append(foodness_label)
+            y_freshness.append(fresh_label)
+            y_item.append(item_label)
+
+            w_foodness.append(foodness_weights.get(foodness_label, 1.0))
+
+            # Non-food images should not contribute to the freshness loss
+            if foodness_label == 0:
+                w_freshness.append(0.0)
+            else:
+                w_freshness.append(freshness_weights.get(fresh_label, 1.0))
+
+            w_item.append(item_weights.get(item_label, 1.0))
+
+        if len(X) == 0:
+            X = np.zeros((1, IMG_SIZE[0], IMG_SIZE[1], 3), dtype="float32")
+            y_foodness = [0]
+            y_freshness = [0]
+            y_item = [item_map.get("NonFood", 0)]
+            w_foodness = [0.0]
+            w_freshness = [0.0]
+            w_item = [0.0]
+
+        return (
+            np.array(X, dtype="float32"),
+            {
+                "foodness": np.array(y_foodness, dtype="float32"),
+                "freshness": np.array(y_freshness, dtype="int32"),
+                "item": np.array(y_item, dtype="int32"),
+            },
+            {
+                "foodness": np.array(w_foodness, dtype="float32"),
+                "freshness": np.array(w_freshness, dtype="float32"),
+                "item": np.array(w_item, dtype="float32"),
+            }
+        )
+
+    def augment_img(self, img):
+        h, w = img.shape[:2]
+
+        if random.random() < 0.5:
+            img = cv2.flip(img, 1)
+
+        angle = np.random.uniform(-22, 22)
+        M = cv2.getRotationMatrix2D((w//2, h//2), angle, 1.0)
+        img = cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+
+        scale = np.random.uniform(0.82, 1.0)
+        ch, cw = int(h * scale), int(w * scale)
+        y1 = np.random.randint(0, h - ch + 1)
+        x1 = np.random.randint(0, w - cw + 1)
+        img = cv2.resize(img[y1:y1+ch, x1:x1+cw], IMG_SIZE)
+
+        alpha = np.random.uniform(0.75, 1.30)
+        beta = np.random.uniform(-25, 25)
+        img = np.clip(alpha * img.astype("float32") + beta, 0, 255).astype("uint8")
+
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype("float32")
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * np.random.uniform(0.75, 1.30), 0, 255)
+        img = cv2.cvtColor(hsv.astype("uint8"), cv2.COLOR_HSV2RGB)
+
+        if random.random() < 0.15:
+            img = cv2.GaussianBlur(img, (3, 3), 0)
+
+        if random.random() < 0.35:
+            noise = np.random.normal(0, np.random.uniform(3, 10), img.shape)
+            img = np.clip(img.astype("float32") + noise, 0, 255).astype("uint8")
+
+        return img
+
+train_gen = FoodGuardGenerator(train_records, augment=True, shuffle=True)
+val_gen   = FoodGuardGenerator(val_records, augment=False, shuffle=False)
+test_gen  = FoodGuardGenerator(test_records, augment=False, shuffle=False)
+
+print("\nData generators are ready:")
+print(f"   Train batches: {len(train_gen):,}")
+print(f"   Val batches  : {len(val_gen):,}")
+print(f"   Test batches : {len(test_gen):,}")
+
+# 13. Build the model architecture
+def build_model(num_items):
+    print("\nBuilding MobileNetV2 model...")
+
+    inputs = layers.Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 3), name="input_tensor")
+
+    base = MobileNetV2(
+        input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3),
+        include_top=False,
+        weights="imagenet",
+        name="mobilenetv2_base"
+    )
+
+    base.trainable = False
+
+    x = base(inputs, training=False)
+    x = layers.GlobalAveragePooling2D()(x)
+
+    x = layers.Dense(512, kernel_regularizer=regularizers.l2(2e-4))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation("relu")(x)
+    x = layers.Dropout(0.45)(x)
+
+    x = layers.Dense(256, kernel_regularizer=regularizers.l2(2e-4))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation("relu")(x)
+    x = layers.Dropout(0.40)(x)
+
+    food_h = layers.Dense(128, activation="relu", kernel_regularizer=regularizers.l2(1e-4))(x)
+    food_h = layers.Dropout(0.25)(food_h)
+    foodness_out = layers.Dense(1, activation="sigmoid", name="foodness")(food_h)
+
+    fresh_h = layers.Dense(128, activation="relu", kernel_regularizer=regularizers.l2(1e-4))(x)
+    fresh_h = layers.Dropout(0.30)(fresh_h)
+    freshness_out = layers.Dense(len(FRESHNESS_LIST), activation="softmax", name="freshness")(fresh_h)
+
+    item_h = layers.Dense(256, activation="relu", kernel_regularizer=regularizers.l2(1e-4))(x)
+    item_h = layers.Dropout(0.30)(item_h)
+    item_out = layers.Dense(num_items, activation="softmax", name="item")(item_h)
+
+    model = Model(
+        inputs=inputs,
+        outputs={
+            "foodness": foodness_out,
+            "freshness": freshness_out,
+            "item": item_out,
+        }
+    )
+
+    print("Model created successfully.")
+    print("   Backbone : MobileNetV2 ImageNet")
+    print("   Outputs  : foodness, freshness, item")
+    print(f"   Input    : {IMG_SIZE[0]}x{IMG_SIZE[1]} RGB")
+
+    return model
+
+def compile_model(model, lr):
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+        loss={
+            "foodness": tf.keras.losses.BinaryCrossentropy(),
+            "freshness": tf.keras.losses.SparseCategoricalCrossentropy(),
+            "item": tf.keras.losses.SparseCategoricalCrossentropy(),
+        },
+        loss_weights={
+            "foodness": 1.4,
+            "freshness": 1.3,
+            "item": 1.0,
+        },
+        metrics={
+            "foodness": [tf.keras.metrics.BinaryAccuracy(name="accuracy")],
+            "freshness": ["accuracy"],
+            "item": ["accuracy"],
+        }
+    )
+
+# 14. Save and load training state
+def load_state():
+    default = {
+        "phase": 1,
+        "phase1_completed_epoch": -1,
+        "phase2_completed_epoch": -1,
+        "phase1_done": False,
+        "best_val_loss": float("inf"),
+        "version": "foodguard_final_v1",
+    }
+
+    if os.path.exists(STATE_PATH):
+        try:
+            saved = json.load(open(STATE_PATH))
+            default.update(saved)
+            print("\nLoaded training state:")
+            print(default)
+        except Exception:
+            print("\nWarning: State file damaged. Starting fresh state.")
+
+    return default
+
+def save_state(state):
+    with open(STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
+
+state = load_state()
+
+# 15. Load checkpoint or build a new model
+model = None
+
+if os.path.exists(LAST_MODEL_PATH):
+    try:
+        print("\nLoading last epoch model...")
+        model = tf.keras.models.load_model(LAST_MODEL_PATH)
+        compile_model(model, LR_FINETUNE if state.get("phase1_done") else LR_HEAD)
+        print("Last model loaded successfully.")
+    except Exception as e:
+        print("\nWarning: Could not load checkpoint. Building a new model.")
+        print("Reason:", str(e)[:300])
+        model = None
+
+if model is None:
+    model = build_model(num_items)
+    compile_model(model, LR_HEAD)
+
+# 16. Training callbacks
+class FoodGuardCheckpoint(tf.keras.callbacks.Callback):
+    def __init__(self, phase):
+        super().__init__()
+        self.phase = phase
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        val_loss = float(logs.get("val_loss", 999999))
+
+        self.model.save(LAST_MODEL_PATH)
+
+        if val_loss < state.get("best_val_loss", float("inf")):
+            state["best_val_loss"] = val_loss
+            self.model.save(BEST_MODEL_PATH)
+            print(f"\n   New best model saved: val_loss={val_loss:.4f}")
+
+        if self.phase == 1:
+            state["phase1_completed_epoch"] = int(epoch)
+        else:
+            state["phase2_completed_epoch"] = int(epoch)
+
+        save_state(state)
+
+# 17. Training phase 1: train top layers
+if not state.get("phase1_done", False):
+    p1_start = state.get("phase1_completed_epoch", -1) + 1
+
+    if p1_start < PHASE1_EPOCHS:
+        print(f"PHASE 1: Training only top layers")
+        print(f"   Epoch: {p1_start + 1} -> {PHASE1_EPOCHS}")
+        print(f"   Learning rate: {LR_HEAD}")
+
+        model.get_layer("mobilenetv2_base").trainable = False
+        compile_model(model, LR_HEAD)
+
+        model.fit(
+            train_gen,
+            validation_data=val_gen,
+            epochs=PHASE1_EPOCHS,
+            initial_epoch=p1_start,
+            callbacks=[
+                FoodGuardCheckpoint(phase=1),
+                tf.keras.callbacks.CSVLogger(LOG_PATH, append=True),
+            ],
+            verbose=1
+        )
+
+    state["phase1_done"] = True
+    state["phase"] = 2
+    save_state(state)
+
+else:
+    print("\nPhase 1 is already completed.")
+
+# 18. Training phase 2: fine-tune MobileNetV2
+p2_start = state.get("phase2_completed_epoch", -1) + 1
+
+if p2_start < PHASE2_EPOCHS:
+    print(f"PHASE 2: Fine-tuning MobileNetV2 last layers")
+    print(f"   Epoch: {p2_start + 1} -> {PHASE2_EPOCHS}")
+    print(f"   Learning rate: {LR_FINETUNE}")
+
+    base = model.get_layer("mobilenetv2_base")
+    base.trainable = True
+
+    for layer in base.layers[:-45]:
+        layer.trainable = False
+
+    compile_model(model, LR_FINETUNE)
+
+    model.fit(
+        train_gen,
+        validation_data=val_gen,
+        epochs=PHASE2_EPOCHS,
+        initial_epoch=p2_start,
+        callbacks=[
+            FoodGuardCheckpoint(phase=2),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss",
+                factor=0.4,
+                patience=4,
+                min_lr=1e-7,
+                verbose=1
+            ),
+            tf.keras.callbacks.CSVLogger(LOG_PATH, append=True),
+        ],
+        verbose=1
+    )
+
+else:
+    print("\nPhase 2 is already completed.")
+
+# 19. Evaluate the final model
+print("FINAL TEST EVALUATION")
+
+eval_path = BEST_MODEL_PATH if os.path.exists(BEST_MODEL_PATH) else LAST_MODEL_PATH
+eval_model = tf.keras.models.load_model(eval_path)
+
+results = eval_model.evaluate(test_gen, verbose=1, return_dict=True)
+
+print("\nFinal test results:")
+for name, value in results.items():
+    print(f"   {name:35s}: {value:.4f}")
+
+# 20. Export final model files
+print("EXPORTING FINAL FILES")
+
+shutil.copy(eval_path, os.path.join(EXPORT_DIR, "best_model.keras"))
+shutil.copy(LABEL_PATH, os.path.join(EXPORT_DIR, "labels.pkl"))
+
+model_config = {
+    "model_file": "best_model.keras",
+    "labels_file": "labels.pkl",
+    "img_size": list(IMG_SIZE),
+    "input_color_space": "RGB",
+    "normalization": "mobilenet_v2_preprocess_input",
+    "model": "MobileNetV2 transfer learning",
+    "outputs": {
+        "foodness": "sigmoid binary output: 1=Food, 0=Irrelevant",
+        "freshness": FRESHNESS_LIST,
+        "item": item_map,
+    },
+    "thresholds": {
+        "foodness_min_for_food": CONFIDENCE_THR,
+        "irrelevant_if_foodness_below": IRRELEVANT_THR,
+        "item_confidence_min": CONFIDENCE_THR,
+    },
+    "prediction_rule": [
+        "If foodness probability < irrelevant_threshold -> Irrelevant",
+        "Else if item predicted as NonFood -> Irrelevant",
+        "Else return item + freshness",
+    ],
+}
+
+with open(os.path.join(EXPORT_DIR, "model_config.json"), "w") as f:
+    json.dump(model_config, f, indent=2)
+
+print("\nExport completed:")
+print(f"   {os.path.join(EXPORT_DIR, 'best_model.keras')}")
+print(f"   {os.path.join(EXPORT_DIR, 'labels.pkl')}")
+print(f"   {os.path.join(EXPORT_DIR, 'model_config.json')}")
+
+# 21. Optional single image prediction function
+def predict_single_image(image_path):
+    img = cv2.imread(image_path)
+
+    if img is None:
+        print("Image not found:", image_path)
+        return
+
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, IMG_SIZE)
+    img = img.astype("float32")
+    img = preprocess_input(img)
+    img = np.expand_dims(img, axis=0)
+
+    preds = eval_model.predict(img, verbose=0)
+
+    food_prob = float(preds["foodness"][0][0])
+    fresh_probs = preds["freshness"][0]
+    item_probs = preds["item"][0]
+
+    fresh_idx = int(np.argmax(fresh_probs))
+    item_idx = int(np.argmax(item_probs))
+
+    fresh_conf = float(fresh_probs[fresh_idx])
+    item_conf = float(item_probs[item_idx])
+
+    item_name = index_to_item[item_idx]
+    fresh_name = FRESHNESS_LIST[fresh_idx]
+
+    print("\nPrediction:")
+    print(f"   Food probability : {food_prob:.4f}")
+    print(f"   Item             : {item_name} ({item_conf:.4f})")
+    print(f"   Freshness        : {fresh_name} ({fresh_conf:.4f})")
+
+    if food_prob < IRRELEVANT_THR or item_name == "NonFood":
+        print("   Final result     : Irrelevant image")
+    else:
+        print(f"   Final result     : {item_name} - {fresh_name}")
+
+print("\nCode finished successfully.")
+print("   You can test one image like this:")
+print("   predict_single_image('/content/test.jpg')")

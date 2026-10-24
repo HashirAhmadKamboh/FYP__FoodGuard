@@ -1,0 +1,616 @@
+===============================================================================
+                            FOODGUARD BACKEND SETUP GUIDE
+===============================================================================
+
+Project Title:
+FoodGuard – AI Powered Food Scanner
+
+Version:
+1.0
+
+Backend Framework:
+FastAPI
+
+Programming Language:
+Python 3.12+
+
+Database:
+SQLite
+
+ORM:
+SQLAlchemy
+
+Migration Tool:
+Alembic
+
+Machine Learning Framework:
+TensorFlow / Keras
+
+AI Model:
+MobileNetV2 Transfer Learning
+
+Prepared For:
+BSCS Final Year Project
+University of Central Punjab
+
+===============================================================================
+1. INTRODUCTION
+===============================================================================
+
+This document explains how to install, configure, and execute the backend of
+the FoodGuard project.
+
+The backend is developed using FastAPI and serves as the central component of
+the FoodGuard system. It is responsible for handling REST API requests,
+processing food image predictions using the trained MobileNetV2 model,
+managing user authentication, storing prediction history, serving nutrition
+information, collecting market prices through web scraping, and communicating
+with the SQLite database.
+
+The backend follows a modular architecture, making it easy to understand,
+maintain, and extend in future versions.
+
+===============================================================================
+2. SYSTEM REQUIREMENTS
+===============================================================================
+
+Before running the backend, ensure that your system meets the following
+minimum requirements.
+
+Operating System
+
+• Windows 10 or Windows 11
+• Ubuntu 22.04+
+• Linux distributions supporting Python
+• macOS (optional)
+
+Hardware Requirements
+
+Processor:
+Intel Core i5 (6th Generation or newer)
+
+Memory:
+Minimum 8 GB RAM
+
+Recommended:
+16 GB RAM
+
+Storage:
+Minimum 5 GB Free Space
+
+===============================================================================
+3. REQUIRED SOFTWARE
+===============================================================================
+
+Install the following software before configuring the backend.
+
+• Python 3.12 or later
+• Git
+• Visual Studio Code
+• SQLite
+• Google Chrome (for Selenium Scraper)
+• ChromeDriver (if required)
+• pip package manager
+
+Recommended IDE
+
+Visual Studio Code
+
+Recommended Extensions
+
+• Python
+• Pylance
+• SQLite Viewer
+• GitLens
+
+===============================================================================
+4. BACKEND DIRECTORY STRUCTURE
+===============================================================================
+
+The backend project follows a modular folder structure.
+
+foodguard_backend/
+
+│
+├── app/
+│
+├── api/
+│
+├── core/
+│
+├── database/
+│
+├── models/
+│
+├── schemas/
+│
+├── services/
+│
+├── scraper/
+│
+├── static/
+│
+├── uploads/
+│
+├── ml_model/
+│
+├── alembic/
+│
+├── requirements.txt
+│
+├── alembic.ini
+│
+└── main.py
+
+Each directory has a specific responsibility.
+
+app/
+Contains the main FastAPI application.
+
+api/
+Contains REST API routes.
+
+database/
+Contains SQLAlchemy configuration.
+
+models/
+Contains database models.
+
+schemas/
+Contains request and response schemas.
+
+services/
+Contains business logic.
+
+scraper/
+Contains Punjab market price scraper.
+
+ml_model/
+Contains trained AI model files.
+
+uploads/
+Stores uploaded prediction images.
+
+static/
+Stores static resources.
+
+===============================================================================
+5. PYTHON VIRTUAL ENVIRONMENT
+===============================================================================
+
+Step 1
+
+Open terminal inside the backend directory.
+
+Example
+
+cd foodguard_backend
+
+Create virtual environment
+
+Windows
+
+python -m venv venv
+
+Linux
+
+python3 -m venv venv
+
+Activate Environment
+
+Windows
+
+venv\Scripts\activate
+
+Linux
+
+source venv/bin/activate
+
+After activation the terminal should display
+
+(venv)
+
+===============================================================================
+6. INSTALL PYTHON DEPENDENCIES
+===============================================================================
+
+Install all required packages.
+
+Command
+
+pip install -r requirements.txt
+
+The installation may take several minutes depending upon internet speed.
+
+Major Libraries Installed
+
+FastAPI
+
+Uvicorn
+
+TensorFlow
+
+Keras
+
+NumPy
+
+OpenCV
+
+Pillow
+
+SQLAlchemy
+
+Alembic
+
+Pydantic
+
+Passlib
+
+Python-Jose
+
+Requests
+
+BeautifulSoup4
+
+Selenium
+
+WebDriver Manager
+
+Pandas
+
+Scikit-Learn
+
+Any additional project dependencies specified in requirements.txt.
+
+===============================================================================
+7. DATABASE CONFIGURATION
+===============================================================================
+
+FoodGuard uses SQLite as the primary database.
+
+The database stores
+
+• Users
+
+• Authentication Tokens
+
+• Prediction History
+
+• Nutrition Information
+
+• Commodity Data
+
+• Market Prices
+
+SQLite is automatically created if it does not exist.
+
+Database File
+
+sqlite.db
+
+===============================================================================
+8. DATABASE MIGRATIONS
+===============================================================================
+
+FoodGuard uses Alembic for database migrations.
+
+Run migrations using
+
+alembic upgrade head
+
+If the database already exists, Alembic will synchronize all tables with the
+latest schema.
+
+===============================================================================
+9. AI MODEL CONFIGURATION
+===============================================================================
+
+The trained AI model must exist before running the backend.
+
+Required Files
+
+best_model.keras
+
+labels.pkl
+
+model_config.json
+
+These files should be placed inside the model directory.
+
+The backend automatically loads the model during startup.
+
+Model Features
+
+• MobileNetV2
+
+• Transfer Learning
+
+• Food Detection
+
+• Freshness Prediction
+
+• Item Classification
+
+• Non-Food Detection
+
+Supported Freshness Labels
+
+Fresh
+
+Semi-Fresh
+
+Spoiled
+
+===============================================================================
+10. IMAGE PREPROCESSING
+===============================================================================
+
+Before prediction, uploaded images undergo preprocessing.
+
+Processing Steps
+
+1.
+Receive uploaded image.
+
+2.
+Convert image to RGB.
+
+3.
+Resize image.
+
+Image Size
+
+192 × 192 pixels
+
+4.
+Normalize pixel values.
+
+5.
+Apply MobileNetV2 preprocessing.
+
+6.
+Convert image to Tensor.
+
+7.
+Send tensor to AI model.
+
+===============================================================================
+11. AUTHENTICATION MODULE
+===============================================================================
+
+The backend provides secure authentication.
+
+Implemented Features
+
+• User Registration
+
+• Login
+
+• JWT Authentication
+
+• Password Hashing
+
+• Token Verification
+
+Protected Endpoints
+
+Prediction History
+
+Profile
+
+User Data
+
+===============================================================================
+12. PREDICTION SERVICE
+===============================================================================
+
+Prediction Workflow
+
+User uploads image
+
+↓
+
+Backend receives image
+
+↓
+
+Image preprocessing
+
+↓
+
+TensorFlow model
+
+↓
+
+Food Detection
+
+↓
+
+Freshness Prediction
+
+↓
+
+Nutrition Lookup
+
+↓
+
+Market Price Lookup
+
+↓
+
+JSON Response
+
+===============================================================================
+13. WEB SCRAPER
+===============================================================================
+
+FoodGuard automatically collects market prices from official government
+sources.
+
+Supported Sources
+
+AMIS Pakistan
+
+Punjab Price Control and Commodities Management Department (PCCMD)
+
+Punjab Sahulat Bazaar Authority (PSBA)
+
+The scraper:
+
+• Downloads latest commodity prices.
+• Cleans scraped data.
+• Normalizes city names.
+• Removes duplicate entries.
+• Stores records in SQLite.
+
+===============================================================================
+14. RUNNING THE BACKEND
+===============================================================================
+
+Open terminal inside backend folder.
+
+Activate virtual environment.
+
+Run
+
+uvicorn app.main:app --reload
+
+If successful, the terminal displays
+
+Uvicorn running on:
+
+http://127.0.0.1:8000
+
+The API server is now ready to accept requests from the React Native mobile
+application.
+
+===============================================================================
+15. API DOCUMENTATION
+===============================================================================
+
+FastAPI automatically generates interactive documentation.
+
+Swagger UI
+
+http://127.0.0.1:8000/docs
+
+ReDoc
+
+http://127.0.0.1:8000/redoc
+
+These interfaces allow developers to test APIs directly from the browser.
+
+===============================================================================
+16. COMMON TROUBLESHOOTING
+===============================================================================
+
+Problem:
+ModuleNotFoundError
+
+Solution:
+Install missing packages using
+
+pip install -r requirements.txt
+
+--------------------------------------------------
+
+Problem:
+Database Not Found
+
+Solution:
+Run
+
+alembic upgrade head
+
+--------------------------------------------------
+
+Problem:
+Model Loading Error
+
+Solution:
+Verify that
+
+best_model.keras
+labels.pkl
+model_config.json
+
+exist in the configured model directory.
+
+--------------------------------------------------
+
+Problem:
+Prediction Fails
+
+Solution:
+
+Check
+
+• Image format
+• Backend logs
+• Model path
+• TensorFlow installation
+
+--------------------------------------------------
+
+Problem:
+Scraper Does Not Work
+
+Solution
+
+Check
+
+Internet connection
+
+Government websites availability
+
+Chrome installation
+
+ChromeDriver compatibility
+
+===============================================================================
+17. DEVELOPMENT NOTES
+===============================================================================
+
+The backend follows REST architecture and separates responsibilities into
+routers, services, models, schemas, and utility modules.
+
+Business logic is isolated from API endpoints to improve maintainability,
+testing, and scalability.
+
+The modular architecture allows future developers to extend the application
+without affecting existing functionality.
+
+===============================================================================
+18. FUTURE ENHANCEMENTS
+===============================================================================
+
+Future backend improvements may include:
+
+• PostgreSQL integration
+• Docker deployment
+• Cloud hosting
+• Redis caching
+• Background task queues
+• AI model versioning
+• Multi-language API support
+• Role-based access control
+• Push notification services
+• Real-time analytics
+• Model performance monitoring
+
+===============================================================================
+19. CONCLUSION
+===============================================================================
+
+The FoodGuard backend serves as the core processing engine of the entire
+application. It integrates Artificial Intelligence, REST APIs, authentication,
+database management, nutrition services, market price collection, and image
+processing into a unified backend system.
+
+The modular FastAPI architecture ensures that the application remains
+maintainable, scalable, and suitable for future enhancements while providing a
+stable foundation for AI-assisted food freshness prediction.
+
+===============================================================================
+                          END OF BACKEND SETUP GUIDE
+===============================================================================

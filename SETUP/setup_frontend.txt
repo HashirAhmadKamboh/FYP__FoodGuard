@@ -1,0 +1,679 @@
+===============================================================================
+                         FOODGUARD FRONTEND SETUP GUIDE
+===============================================================================
+
+Project Title:
+FoodGuard – AI Powered Food Scanner
+
+Frontend Framework:
+React Native
+
+Development Platform:
+Expo
+
+Programming Language:
+JavaScript
+
+Prepared For:
+BSCS Final Year Project
+University of Central Punjab
+
+===============================================================================
+1. INTRODUCTION
+===============================================================================
+
+This document explains how to install, configure, and execute the React Native
+frontend application of the FoodGuard project.
+
+The frontend is responsible for providing an intuitive and responsive mobile
+interface through which users interact with the FoodGuard system. It communicates
+with the FastAPI backend using REST APIs and allows users to perform various
+operations including user registration, login, food image upload, AI prediction,
+nutrition lookup, market price viewing, and prediction history.
+
+The application has been developed using React Native with Expo to ensure
+cross-platform compatibility and ease of development.
+
+===============================================================================
+2. SYSTEM REQUIREMENTS
+===============================================================================
+
+Before running the frontend application, ensure that your computer meets the
+following requirements.
+
+Operating System
+
+• Windows 10 or Windows 11
+• Ubuntu Linux
+• macOS
+
+Hardware Requirements
+
+Processor:
+Intel Core i5 or above
+
+Memory:
+Minimum 8 GB RAM
+
+Recommended:
+16 GB RAM
+
+Storage:
+Minimum 5 GB Free Space
+
+Internet Connection:
+Required for downloading packages and communicating with backend APIs.
+
+===============================================================================
+3. REQUIRED SOFTWARE
+===============================================================================
+
+Install the following software before running the project.
+
+• Node.js (Latest LTS Version)
+• npm (comes with Node.js)
+• Expo CLI (optional if using npx)
+• Visual Studio Code
+• Git
+• Android Studio
+• Expo Go Mobile Application (Android/iOS)
+
+Recommended VS Code Extensions
+
+• React Native Tools
+• ES7+ React Snippets
+• JavaScript (ES6)
+• Prettier
+• ESLint
+• GitLens
+
+===============================================================================
+4. PROJECT DIRECTORY STRUCTURE
+===============================================================================
+
+foodguard_frontend/
+
+│
+├── assets/
+│
+├── components/
+│
+├── navigation/
+│
+├── screens/
+│
+├── services/
+│
+├── context/
+│
+├── utils/
+│
+├── constants/
+│
+├── hooks/
+│
+├── package.json
+│
+├── app.json
+│
+├── babel.config.js
+│
+└── App.js
+
+Folder Description
+
+assets/
+Stores images, icons, splash screens, logos, fonts, and other static resources.
+
+components/
+Contains reusable UI components such as buttons, cards, dialogs, and loaders.
+
+navigation/
+Defines application navigation using React Navigation.
+
+screens/
+Contains all application screens.
+
+services/
+Contains API service functions responsible for communicating with the FastAPI
+backend.
+
+context/
+Contains authentication and global state management.
+
+utils/
+Contains helper functions and utility methods.
+
+constants/
+Stores API URLs, colors, application constants, and configuration values.
+
+hooks/
+Contains reusable custom React Hooks.
+
+===============================================================================
+5. INSTALL NODE.JS DEPENDENCIES
+===============================================================================
+
+Open Terminal
+
+Navigate to frontend folder
+
+Example
+
+cd foodguard_frontend
+
+Install project dependencies
+
+npm install
+
+or
+
+npm install --legacy-peer-deps
+
+This command downloads all required packages listed in package.json.
+
+Major Packages Installed
+
+• React
+• React Native
+• Expo
+• Expo Camera
+• Expo Image Picker
+• React Navigation
+• Axios
+• Async Storage
+• Expo File System
+• Expo Secure Store
+• React Native Gesture Handler
+• React Native Safe Area Context
+• React Native Screens
+
+===============================================================================
+6. APPLICATION CONFIGURATION
+===============================================================================
+
+The frontend communicates with the FastAPI backend using REST APIs.
+
+Locate the API configuration file.
+
+Example
+
+services/api.js
+
+or
+
+constants/config.js
+
+Update the Backend URL.
+
+Example
+
+http://127.0.0.1:8000
+
+For Android Emulator
+
+http://10.0.2.2:8000
+
+For Physical Device
+
+http://YOUR_LOCAL_IP:8000
+
+Example
+
+http://192.168.1.100:8000
+
+Both the mobile device and backend computer must be connected to the same Wi-Fi
+network when testing on a physical device.
+
+===============================================================================
+7. STARTING THE APPLICATION
+===============================================================================
+
+Start Expo Development Server
+
+Command
+
+npx expo start
+
+or
+
+npm start
+
+The Expo Developer Console will open.
+
+A QR Code will be displayed.
+
+===============================================================================
+8. RUNNING THE APPLICATION
+===============================================================================
+
+Option 1
+
+Android Emulator
+
+Press
+
+a
+
+to launch Android Emulator.
+
+--------------------------------------------------
+
+Option 2
+
+Expo Go
+
+Install Expo Go from Google Play Store or Apple App Store.
+
+Open Expo Go.
+
+Scan the QR Code displayed by the Expo Development Server.
+
+The application will automatically load on the mobile device.
+
+===============================================================================
+9. APPLICATION WORKFLOW
+===============================================================================
+
+Application Startup
+
+↓
+
+Splash Screen
+
+↓
+
+City Selection
+
+↓
+
+Home Screen
+
+↓
+
+User Login or Guest Access
+
+↓
+
+AI Prediction Screen
+
+↓
+
+Capture Image or Select from Gallery
+
+↓
+
+Image Upload
+
+↓
+
+Backend Processing
+
+↓
+
+AI Prediction
+
+↓
+
+Receive JSON Response
+
+↓
+
+Display
+
+• Food Item
+
+• Freshness
+
+• Confidence Score
+
+• Nutrition Information
+
+• Market Prices
+
+↓
+
+Save Prediction History (Authenticated Users)
+
+===============================================================================
+10. MAIN APPLICATION MODULES
+===============================================================================
+
+Authentication Module
+
+Features
+
+• User Registration
+
+• User Login
+
+• Secure Logout
+
+• JWT Authentication
+
+--------------------------------------------------
+
+AI Prediction Module
+
+Features
+
+• Camera Capture
+
+• Gallery Upload
+
+• Image Preview
+
+• Prediction Request
+
+• Prediction Result
+
+--------------------------------------------------
+
+Nutrition Module
+
+Displays
+
+• Calories
+
+• Protein
+
+• Fat
+
+• Carbohydrates
+
+• Fiber
+
+--------------------------------------------------
+
+Market Price Module
+
+Displays
+
+Government market prices collected from
+
+• AMIS
+
+• PCCMD
+
+• PSBA
+
+--------------------------------------------------
+
+History Module
+
+Displays
+
+• Previous Predictions
+
+• Prediction Date
+
+• Freshness
+
+• Food Item
+
+• Nutrition Information
+
+===============================================================================
+11. USER INTERFACE SCREENS
+===============================================================================
+
+The frontend contains multiple user-friendly screens.
+
+Implemented Screens
+
+• Splash Screen
+
+• Welcome Screen
+
+• City Selection Screen
+
+• Login Screen
+
+• Registration Screen
+
+• Home Screen
+
+• AI Analysis Screen
+
+• Prediction Result Screen
+
+• Nutrition Screen
+
+• Market Rates Screen
+
+• Prediction History Screen
+
+• Profile Screen
+
+• Supported Categories Dialog
+
+• About Application Dialog
+
+===============================================================================
+12. CAMERA AND GALLERY PERMISSIONS
+===============================================================================
+
+The application requires the following permissions.
+
+Camera Permission
+
+Allows users to capture food images.
+
+Gallery Permission
+
+Allows users to upload existing food images.
+
+The application automatically requests these permissions during first use.
+
+===============================================================================
+13. API COMMUNICATION
+===============================================================================
+
+The frontend communicates with the FastAPI backend using Axios.
+
+Major APIs Used
+
+Authentication APIs
+
+Prediction API
+
+Nutrition API
+
+Commodity API
+
+Market Price API
+
+Prediction History API
+
+The backend returns JSON responses which are parsed and displayed in the mobile
+application.
+
+===============================================================================
+14. ERROR HANDLING
+===============================================================================
+
+The application includes proper error handling.
+
+Examples
+
+Network Error
+
+Displays
+
+"Unable to connect to server."
+
+--------------------------------------------------
+
+Invalid Login
+
+Displays
+
+"Incorrect Email or Password."
+
+--------------------------------------------------
+
+Prediction Failure
+
+Displays
+
+"Prediction failed. Please try again."
+
+--------------------------------------------------
+
+No Internet
+
+Displays
+
+"Please check your internet connection."
+
+--------------------------------------------------
+
+Server Error
+
+Displays
+
+"Internal Server Error."
+
+===============================================================================
+15. COMMON TROUBLESHOOTING
+===============================================================================
+
+Problem
+
+npm install fails
+
+Solution
+
+Delete
+
+node_modules
+
+Delete
+
+package-lock.json
+
+Run
+
+npm install
+
+--------------------------------------------------
+
+Problem
+
+Expo does not start
+
+Solution
+
+Run
+
+npx expo start --clear
+
+--------------------------------------------------
+
+Problem
+
+Application cannot connect to backend
+
+Solution
+
+• Verify backend is running.
+
+• Check API URL.
+
+• Ensure firewall allows port 8000.
+
+• Connect both devices to the same Wi-Fi network.
+
+--------------------------------------------------
+
+Problem
+
+Camera Permission Denied
+
+Solution
+
+Enable Camera Permission from Device Settings.
+
+--------------------------------------------------
+
+Problem
+
+QR Code does not work
+
+Solution
+
+Restart Expo Server
+
+Run
+
+npx expo start --clear
+
+===============================================================================
+16. DEVELOPMENT NOTES
+===============================================================================
+
+The frontend follows a modular component-based architecture.
+
+Reusable components have been separated from business logic to improve
+maintainability and code readability.
+
+API communication is centralized within service files, allowing backend URLs
+and endpoints to be updated without modifying multiple screens.
+
+Navigation is handled through React Navigation, while authentication state is
+managed globally using Context API.
+
+The user interface has been designed to remain simple, responsive, and suitable
+for non-technical users.
+
+===============================================================================
+17. FUTURE ENHANCEMENTS
+===============================================================================
+
+Future improvements may include
+
+• Dark Mode
+
+• Offline Prediction Support
+
+• Push Notifications
+
+• Voice Commands
+
+• Barcode Scanner
+
+• OCR Food Label Recognition
+
+• AI Recommendation Engine
+
+• Urdu Language Support
+
+• Multi-language Interface
+
+• Cloud Synchronization
+
+• User Profile Customization
+
+• Real-Time Notifications
+
+• Food Recommendation System
+
+• AI Health Assistant
+
+===============================================================================
+18. CONCLUSION
+===============================================================================
+
+The FoodGuard frontend provides a modern, responsive, and user-friendly mobile
+interface for interacting with the Artificial Intelligence backend. It allows
+users to perform food freshness prediction, access nutritional information,
+view official Punjab market prices, manage authentication, and review prediction
+history through a clean and intuitive React Native application.
+
+The modular architecture, reusable components, and REST API integration make
+the frontend scalable, maintainable, and suitable for future enhancements while
+providing an excellent user experience.
+
+===============================================================================
+                          END OF FRONTEND SETUP GUIDE
+===============================================================================

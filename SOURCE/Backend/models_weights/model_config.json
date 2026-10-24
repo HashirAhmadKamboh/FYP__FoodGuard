@@ -1,0 +1,52 @@
+{
+  "model_file": "best_model.keras",
+  "labels_file": "labels.pkl",
+  "img_size": [
+    192,
+    192
+  ],
+  "input_color_space": "RGB",
+  "normalization": "mobilenet_v2_preprocess_input",
+  "model": "MobileNetV2 transfer learning",
+  "outputs": {
+    "foodness": "sigmoid binary output: 1=Food, 0=Irrelevant",
+    "freshness": [
+      "Fresh",
+      "Semi-Fresh",
+      "Spoiled"
+    ],
+    "item": {
+      "Apple": 0,
+      "Banana": 1,
+      "Bellpepper": 2,
+      "Bittergourd": 3,
+      "Capsicum": 4,
+      "Carrot": 5,
+      "Chicken": 6,
+      "Cucumber": 7,
+      "Fish": 8,
+      "Grape": 9,
+      "Guava": 10,
+      "Jujube": 11,
+      "Mango": 12,
+      "Meat": 13,
+      "NonFood": 14,
+      "Okra": 15,
+      "Orange": 16,
+      "Pomegranate": 17,
+      "Potato": 18,
+      "Strawberry": 19,
+      "Tomato": 20
+    }
+  },
+  "thresholds": {
+    "foodness_min_for_food": 0.6,
+    "irrelevant_if_foodness_below": 0.55,
+    "item_confidence_min": 0.6
+  },
+  "prediction_rule": [
+    "If foodness probability < irrelevant_threshold \u2192 Irrelevant",
+    "Else if item predicted as NonFood \u2192 Irrelevant",
+    "Else return item + freshness"
+  ]
+}
